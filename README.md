@@ -42,8 +42,8 @@ The engine processes transactions in file order with one reusable CSV record
 buffer. It retains two `HashMap`s in memory.
 
 - Accounts are keyed by client ID and store available funds, held funds, and a
-  lock flag. An account is created on the client's first valid row. Total is
-  derived as available plus held.
+  lock flag. An account is created on the client's first valid deposit or
+  withdrawal row. Total is derived as available plus held.
 - Accepted deposits are keyed by transaction ID and store the client ID, amount,
   and dispute status. This history allows a later row to reference an earlier
   deposit. Memory grows with the number of clients and retained deposits.
@@ -61,15 +61,17 @@ the disputed funds from held, reduces total, and locks the account.
 
 - **Dispute eligibility.** Only accepted deposits can be disputed. The deposit
   must belong to the client on the reference row. Unknown or cross-client
-  references, repeated active disputes, and resolves or chargebacks without an
-  active dispute leave balances unchanged. A resolved deposit can be disputed again.
+  references are ignored without creating accounts or changing state. Repeated
+  active disputes and resolves or chargebacks without an active dispute leave
+  balances unchanged. A resolved deposit can be disputed again while the account
+  is unlocked.
 - **Negative balances.** A dispute holds the full deposit amount even if some
   of it has been withdrawn. Available funds can become negative, and a later
   chargeback can make total negative. Deposit and withdrawal amounts must be
   nonnegative.
-- **Permanent lock.** The required chargeback lock is treated as permanent.
-  Later valid transactions for that client are ignored, including resolutions
-  of other outstanding disputes. Input validation still applies to those rows.
+- **Permanent lock.** A chargeback permanently blocks new deposits, withdrawals,
+  and disputes. The engine assumes existing disputes can still be settled by
+  resolve or chargeback after the lock. Input validation still applies to all rows.
 - **Numeric range.** The fixed-point representation spans
   `-922337203685477.5808` through `922337203685477.5807`. Amounts and balance
   changes outside the supported range fail the run.

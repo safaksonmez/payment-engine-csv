@@ -113,14 +113,12 @@ fn process_record(
         _ => return Err("unknown transaction type"),
     };
 
-    let account = accounts.entry(client).or_default();
-    // Assume a chargeback permanently freezes all activity on the account.
-    if account.locked {
-        return Ok(());
-    }
-
     match transaction {
         Transaction::Deposit(amount) => {
+            let account = accounts.entry(client).or_default();
+            if account.locked {
+                return Ok(());
+            }
             let available = account
                 .available
                 .checked_add(amount)
@@ -139,7 +137,8 @@ fn process_record(
             );
         }
         Transaction::Withdrawal(amount) => {
-            if account.available >= amount {
+            let account = accounts.entry(client).or_default();
+            if !account.locked && account.available >= amount {
                 account.available -= amount;
             }
         }
@@ -150,9 +149,13 @@ fn process_record(
             else {
                 return Ok(());
             };
+            let account = accounts
+                .get_mut(&client)
+                .expect("an accepted deposit has an account");
             let amount = deposit.amount;
+            // A permanent lock blocks new activity and allows pending disputes to settle.
             match transaction {
-                Transaction::Dispute if !deposit.disputed => {
+                Transaction::Dispute if !account.locked && !deposit.disputed => {
                     let available = account
                         .available
                         .checked_sub(amount)
@@ -292,16 +295,34 @@ mod tests {
         ledger.apply("chargeback,1,2");
         ledger.assert_balance(1, (50_000, 20_000, 70_000, true));
 
-        for row in [
-            "deposit,1,4,1.5",
-            "withdrawal,1,5,2",
-            "resolve,1,1",
-            "dispute,1,3",
-            "chargeback,1,1",
-        ] {
+        for row in ["deposit,1,4,1.5", "withdrawal,1,5,2", "dispute,1,3"] {
             ledger.apply(row);
             ledger.assert_balance(1, (50_000, 20_000, 70_000, true));
         }
+        assert!(!ledger.deposits.contains_key(&4));
+        assert!(!ledger.deposits[&3].disputed);
+    }
+
+    #[test]
+    fn resolves_an_outstanding_dispute_after_account_lock() {
+        let mut ledger = Ledger::default();
+        ledger.apply("deposit,1,1,2\ndeposit,1,2,3\ndispute,1,1\ndispute,1,2\nchargeback,1,1");
+        ledger.assert_balance(1, (0, 30_000, 30_000, true));
+
+        ledger.apply("resolve,1,2");
+        ledger.assert_balance(1, (30_000, 0, 30_000, true));
+        assert!(!ledger.deposits[&2].disputed);
+    }
+
+    #[test]
+    fn charges_back_an_outstanding_dispute_after_account_lock() {
+        let mut ledger = Ledger::default();
+        ledger.apply("deposit,1,1,2\ndeposit,1,2,3\ndispute,1,1\ndispute,1,2\nchargeback,1,1");
+        ledger.assert_balance(1, (0, 30_000, 30_000, true));
+
+        ledger.apply("chargeback,1,2");
+        ledger.assert_balance(1, (0, 0, 0, true));
+        assert!(!ledger.deposits.contains_key(&2));
     }
 
     #[test]
@@ -311,6 +332,15 @@ mod tests {
         for row in ["dispute,1,99", "resolve,1,99", "chargeback,1,99"] {
             ledger.apply(row);
             ledger.assert_balance(1, (40_000, 0, 40_000, false));
+        }
+    }
+
+    #[test]
+    fn unknown_references_do_not_create_an_account() {
+        let mut ledger = Ledger::default();
+        for row in ["dispute,2,99", "resolve,2,99", "chargeback,2,99"] {
+            ledger.apply(row);
+            assert!(ledger.accounts.is_empty(), "{row}");
         }
     }
 
@@ -341,6 +371,18 @@ mod tests {
         ledger.apply("deposit,1,10,4\ndeposit,2,20,7\ndispute,2,10");
         ledger.assert_balance(1, (40_000, 0, 40_000, false));
         ledger.assert_balance(2, (70_000, 0, 70_000, false));
+    }
+
+    #[test]
+    fn cross_client_references_do_not_create_an_account() {
+        let mut ledger = Ledger::default();
+        ledger.apply("deposit,1,10,4\ndispute,1,10");
+        for row in ["dispute,2,10", "resolve,2,10", "chargeback,2,10"] {
+            ledger.apply(row);
+            assert!(!ledger.accounts.contains_key(&2), "{row}");
+            ledger.assert_balance(1, (0, 40_000, 40_000, false));
+            assert!(ledger.deposits[&10].disputed);
+        }
     }
 
     #[test]
