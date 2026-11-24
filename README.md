@@ -94,6 +94,7 @@ and the final CSV for a chargeback that leaves a negative total.
 
 ## AI Assistance
 
-OpenAI Codex was used extensively for implementation, test generation, code
-review, and documentation. The full AI interaction transcript will be provided
-separately.
+OpenAI Codex was used extensively for implementation, test generation, code review, and documentation.
+Google Gemini was used for an independent code review and subsequent verification of the identified issues and fixes.
+The implementation was validated using automated tests, static analysis, and manual CLI examples.
+The relevant AI interaction transcripts will be provided separately with the submission.
